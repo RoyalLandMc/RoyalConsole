@@ -5,7 +5,8 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "postdist": "node -e \"const fs=require('fs'),p=require('path'),d=p.join(require('os').homedir(),'Desktop','RoyalConsole');fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync('dist'))if(f.endsWith('.exe'))fs.copyFileSync(p.join('dist',f),p.join(d,f));console.log('copied to '+d)\""
   },
   "build": {
     "appId": "ir.royalland.console",

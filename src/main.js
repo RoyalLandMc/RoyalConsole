@@ -17,18 +17,17 @@ function updateHost(h) {
   saveHosts(all)
 }
 
-function connect(id) {
-  if (conns.has(id)) return conns.get(id)
-  const h = loadHosts().find(x => x.id === id)
-  const p = new Promise((res, rej) => {
+function dial(h) {
+  return new Promise((res, rej) => {
     const c = new Client()
-    c.on('ready', () => res(c))
-      .on('error', e => { conns.delete(id); rej(e) })
-      .on('close', () => { conns.delete(id); send('host-closed', id) })
+    let ready = false
+    c.on('ready', () => { ready = true; res(c) })
+      .on('error', e => { c.end(); rej(e) })
+      .on('close', () => { if (ready) { conns.delete(h.id); send('host-closed', h.id) } })
     c.connect({
       host: h.host, port: +h.port || 22, username: h.user,
       privateKey: fs.readFileSync(h.key || path.join(os.homedir(), '.ssh', 'id_ed25519')),
-      keepaliveInterval: 15000, readyTimeout: 15000,
+      keepaliveInterval: 15000, keepaliveCountMax: 4, readyTimeout: 30000,
       hostVerifier: k => {
         const fp = crypto.createHash('sha256').update(k).digest('base64')
         if (!h.fp) { h.fp = fp; updateHost(h); return true }
@@ -36,6 +35,21 @@ function connect(id) {
       }
     })
   })
+}
+
+function connect(id) {
+  if (conns.has(id)) return conns.get(id)
+  const h = loadHosts().find(x => x.id === id)
+  if (!h) return Promise.reject(new Error('Unknown host'))
+  const p = (async () => {
+    for (let i = 1; ; i++) {
+      try { return await dial(h) } catch (e) {
+        if (i >= 3 || /authentication|verification|ENOENT/i.test(e.message)) { conns.delete(id); throw e }
+        send('host-retry', id, i + 1)
+        await new Promise(r => setTimeout(r, 1500 * i))
+      }
+    }
+  })()
   conns.set(id, p)
   return p
 }
@@ -88,6 +102,7 @@ ipcMain.handle('hosts', () => loadHosts())
 ipcMain.handle('host-save', (_, h) => { h.id ||= crypto.randomUUID(); updateHost(h); return h })
 ipcMain.handle('host-del', (_, id) => { saveHosts(loadHosts().filter(x => x.id !== id)); conns.get(id)?.then(c => c.end()).catch(() => {}) })
 ipcMain.handle('connect', async (_, id) => { await connect(id); return true })
+ipcMain.handle('disconnect', async (_, id) => { const p = conns.get(id); conns.delete(id); (await p?.catch(() => null))?.end() })
 ipcMain.handle('run', (_, id, cmd) => run(id, cmd))
 
 ipcMain.handle('stats', async (_, id) => {

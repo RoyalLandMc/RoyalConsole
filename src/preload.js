@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   saveHost: h => r.invoke('host-save', h),
   delHost: id => r.invoke('host-del', id),
   connect: id => r.invoke('connect', id),
+  disconnect: id => r.invoke('disconnect', id),
   run: (id, cmd) => r.invoke('run', id, cmd),
   stats: id => r.invoke('stats', id),
   action: (id, act, c) => r.invoke('action', id, act, c),

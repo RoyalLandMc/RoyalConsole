@@ -1,7 +1,15 @@
 const $ = s => document.querySelector(s)
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 let hosts = [], active = null, sel = null
-const st = {}, live = {}, timers = {}, tabs = new Map(), bySid = new Map(), userStopped = new Set(), crashed = new Set()
+const st = {}, live = {}, timers = {}, tabs = new Map(), bySid = new Map(), userStopped = new Set(), crashed = new Set(), retry = {}
+const store = (k, v) => { try { v === undefined ? (v = JSON.parse(localStorage.getItem(k))) : localStorage.setItem(k, JSON.stringify(v)) } catch {} return v }
+const cache = store('rc-cache') || {}, openHosts = new Set(store('rc-open') || [])
+const msg = e => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+function toast(t, bad = true) {
+  const d = document.createElement('div')
+  d.className = 'toast' + (bad ? ' bad' : ''); d.textContent = msg(t)
+  $('#toasts').append(d); setTimeout(() => d.remove(), 6000)
+}
 
 function form(title, fields, v = {}) {
   const m = $('#modal')
@@ -15,7 +23,7 @@ function form(title, fields, v = {}) {
 }
 
 const consolesOf = h => {
-  const defs = h.consoles || [], run = Object.keys(st[h.id]?.consoles || {})
+  const defs = h.consoles || [], run = Object.keys((st[h.id] || cache[h.id])?.consoles || {})
   return [...defs.map(d => d.name), ...run.filter(n => !defs.some(d => d.name === n))]
 }
 const defOf = (h, n) => (h.consoles || []).find(d => d.name === n) || { name: n }
@@ -23,14 +31,16 @@ const hostOf = id => hosts.find(h => h.id === id)
 
 function renderSide() {
   $('#side').innerHTML = hosts.map(h => {
-    const on = live[h.id], cls = on === true ? 'ok' : on === false ? 'bad' : ''
-    const items = on ? [...consolesOf(h).map(n => {
-      const run = st[h.id]?.consoles[n], k = h.id + ':' + n
-      return `<div class="item ${sel === k ? 'on' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
-    }), `<div class="item ${sel === h.id + ':' ? 'on' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
-    `<div class="item ${active === 'files:' + h.id ? 'on' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
+    const on = live[h.id], wait = on === 'wait', cls = on === true ? 'ok' : on === false ? 'bad' : wait ? 'warn pulse' : ''
+    const stale = on !== true, show = on === true || (wait && cache[h.id])
+    const items = show ? [...consolesOf(h).map(n => {
+      const run = (st[h.id] || cache[h.id])?.consoles[n], k = h.id + ':' + n
+      return `<div class="item ${sel === k ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${stale ? '' : run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
+    }), `<div class="item ${sel === h.id + ':' ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
+    `<div class="item ${active === 'files:' + h.id ? 'on' : ''} ${stale ? 'stale' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
     `<div class="item muted" data-add="${h.id}">+ console</div>`].join('') : ''
-    return `<div class="host" data-host="${h.id}"><span class="dot ${cls}"></span>${esc(h.name)}<span class="sm" data-edit="${h.id}">edit</span></div>${items}`
+    const note = wait ? `<span class="sm">${retry[h.id] ? `retry ${retry[h.id]}/3` : 'connecting…'}</span>` : on === false ? '<span class="sm">offline · retry</span>' : `<span class="sm" data-edit="${h.id}">edit</span>`
+    return `<div class="host" data-host="${h.id}"><span class="dot ${cls}"></span>${esc(h.name)}${note}</div>${items}`
   }).join('') + `<div class="item muted" id="addhost">+ host</div>`
 }
 
@@ -67,20 +77,33 @@ async function poll(id) {
     const prev = st[id]?.consoles || {}
     st[id] = await api.stats(id)
     live[id] = true
+    cache[id] = { consoles: st[id].consoles }; store('rc-cache', cache)
     for (const d of hostOf(id)?.consoles || []) {
       const k = id + ':' + d.name
       if (st[id].consoles[d.name]) crashed.delete(k)
       if (prev[d.name] && !st[id].consoles[d.name] && !userStopped.delete(k) && crashed.add(k))
         new Notification('RoyalConsole', { body: `${d.name} on ${hostOf(id).name} stopped` })
     }
-  } catch { live[id] = false; clearInterval(timers[id]); delete timers[id] }
+  } catch (e) {
+    if (live[id] === true) { toast(`${hostOf(id).name}: connection lost, reconnecting`); clearInterval(timers[id]); delete timers[id]; return connectHost(id) }
+  }
   render()
 }
 
-async function toggleHost(id) {
-  if (timers[id]) { clearInterval(timers[id]); delete timers[id]; delete live[id]; return render() }
-  try { await api.connect(id); live[id] = true; await poll(id); timers[id] = setInterval(() => poll(id), 3000) }
-  catch (e) { live[id] = false; render(); alert(e.message) }
+async function connectHost(id) {
+  if (live[id] === 'wait') return
+  live[id] = 'wait'; delete retry[id]; openHosts.add(id); store('rc-open', [...openHosts]); render()
+  try {
+    await api.connect(id); live[id] = true; delete retry[id]
+    await poll(id); timers[id] = setInterval(() => poll(id), 3000)
+  } catch (e) { live[id] = false; delete retry[id]; render(); toast(`${hostOf(id)?.name}: ${msg(e)}`) }
+}
+
+function toggleHost(id) {
+  if (live[id] === 'wait') return
+  if (live[id] !== true) return connectHost(id)
+  clearInterval(timers[id]); delete timers[id]; delete live[id]; delete st[id]
+  openHosts.delete(id); store('rc-open', [...openHosts]); api.disconnect(id); render()
 }
 
 function activate(k) {
@@ -113,7 +136,8 @@ async function openTab(id, n) {
   term.attachCustomKeyEventHandler(e => !(e.ctrlKey && /^[1-9]$/.test(e.key)))
   const t = { el, tab, term, fit, sid: 0 }
   tabs.set(k, t); activate(k)
-  t.sid = await api.open(id, n || null, term.cols, term.rows)
+  term.write('\x1b[90mconnecting…\x1b[0m\r\n')
+  try { t.sid = await api.open(id, n || null, term.cols, term.rows) } catch (e) { term.write(`\x1b[31m${msg(e)}\x1b[0m\r\n`); return }
   bySid.set(t.sid, t)
   term.onData(d => api.write(t.sid, d))
   term.onResize(({ cols, rows }) => api.resize(t.sid, cols, rows))
@@ -133,7 +157,7 @@ async function openFiles(id) {
   tabs.set(k, t); activate(k)
   let cwd = await F('home'), list = []
   const full = n => (cwd === '/' ? '' : cwd) + '/' + n
-  const fail = e => alert(e.message || e)
+  const fail = e => toast(e.message || e)
   async function ls(d = cwd) {
     try { list = await F('ls', d); cwd = d } catch (e) { return fail(e) }
     list.sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name))
@@ -142,7 +166,7 @@ async function openFiles(id) {
   }
   async function edit(f) {
     const p = full(f.name)
-    if (f.size > 5 << 20) return alert('File too large')
+    if (f.size > 5 << 20) return toast('File too large')
     let txt
     try { txt = await F('read', p) } catch (e) { return fail(e) }
     el.innerHTML = `<div class="fbar"><button data-f="back">Back</button><b class="fpath">${esc(p)}</b><span class="ferr"></span><button class="pri" data-f="save">Save</button></div><textarea class="fedit" spellcheck="false"></textarea>`
@@ -173,7 +197,7 @@ async function openFiles(id) {
   el.ondblclick = e => {
     const f = list[e.target.closest('[data-i]')?.dataset.i]
     if (!f || e.target.dataset.f) return
-    f.dir ? ls(full(f.name)) : TXT.test(f.name) ? edit(f) : alert('Not a text file')
+    f.dir ? ls(full(f.name)) : TXT.test(f.name) ? edit(f) : toast('Not a text file')
   }
   el.onkeydown = e => { if (e.key === 'Enter' && e.target.classList.contains('fpath')) ls(e.target.value) }
   el.ondragover = e => { e.preventDefault(); el.classList.add('drop') }
@@ -204,8 +228,10 @@ async function act(a) {
     await api.action(id, 'kill', d).catch(() => {})
     a = 'start'
   }
-  const r = await api.action(id, a, d)
-  if (r.code) alert(r.out || 'failed')
+  try {
+    const r = await api.action(id, a, d)
+    r.code ? toast(r.out || 'failed') : toast(`${n}: ${a} sent`, false)
+  } catch (e) { toast(e) }
   poll(id)
 }
 
@@ -254,7 +280,7 @@ $('#bc').onclick = async () => {
   if (!v?.text) return
   const hid = sel?.split(':')[0], all = v.scope.trim() === 'all'
   const to = hosts.filter(h => live[h.id] && (all || h.id === hid)).flatMap(h => Object.keys(st[h.id]?.consoles || {}).map(name => [h.id, name]))
-  if (!to.length) return alert('No running consoles')
+  if (!to.length) return toast('No running consoles')
   if (!confirm(`Send "${v.text}" to ${to.length} console(s)?\n${to.map(([i, n]) => hostOf(i).name + ' / ' + n).join('\n')}`)) return
   await Promise.all(to.map(([i, name]) => api.action(i, 'send', { name, text: v.text })))
 }
@@ -269,6 +295,7 @@ document.addEventListener('keydown', e => {
 window.addEventListener('resize', () => tabs.get(active)?.fit.fit())
 api.on('data', (sid, d) => bySid.get(sid)?.term.write(d))
 api.on('exit', sid => bySid.get(sid)?.term.write('\r\n\x1b[90m[closed]\x1b[0m\r\n'))
-api.on('host-closed', id => { live[id] = false; clearInterval(timers[id]); delete timers[id]; render() })
+api.on('host-closed', id => { if (live[id] !== true) return; clearInterval(timers[id]); delete timers[id]; toast(`${hostOf(id).name}: connection lost, reconnecting`); connectHost(id) })
+api.on('host-retry', (id, n) => { retry[id] = n; render() })
 
-api.hosts().then(h => { hosts = h; render() })
+api.hosts().then(h => { hosts = h; render(); h.filter(x => openHosts.has(x.id)).forEach(x => connectHost(x.id)) })

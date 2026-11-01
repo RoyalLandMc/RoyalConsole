@@ -52,3 +52,10 @@ input{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd)
 .badge{margin-left:auto;background:var(--bad);color:#fff;font-size:10px;border-radius:8px;padding:1px 6px}
 .quick{display:flex;flex-direction:column;gap:5px}
 .quick button{display:flex;align-items:center;text-align:left;overflow:hidden;white-space:nowrap}
+#toasts{position:fixed;right:14px;bottom:40px;display:flex;flex-direction:column;gap:8px;z-index:9}
+.toast{background:var(--p2);border:1px solid var(--bd);border-left:3px solid var(--ok);border-radius:6px;padding:9px 12px;max-width:380px;animation:tin .15s}
+.toast.bad{border-left-color:var(--bad)}
+.stale{opacity:.5;pointer-events:none}
+.pulse{animation:pl 1s infinite}
+@keyframes pl{50%{opacity:.25}}
+@keyframes tin{from{transform:translateY(8px);opacity:0}}
