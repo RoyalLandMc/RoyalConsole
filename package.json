@@ -1,0 +1,27 @@
+{
+  "name": "royalconsole",
+  "version": "0.1.0",
+  "description": "SSH console and server monitor for Windows",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "ir.royalland.console",
+    "productName": "RoyalConsole",
+    "files": [
+      "src/**",
+      "node_modules/**"
+    ]
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  }
+}

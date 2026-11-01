@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>RoyalConsole</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><b>RoyalConsole</b><span class="muted">Ctrl+1..9 switch tab</span></header>
+<main>
+  <aside id="side"></aside>
+  <section id="center">
+    <div id="tabs"></div>
+    <div id="terms"><div id="empty" class="muted">Pick a console on the left</div></div>
+  </section>
+  <aside id="info"></aside>
+</main>
+<footer id="foot"></footer>
+<div id="modal" hidden></div>
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
