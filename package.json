@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable"
+    "dist": "electron-builder --win nsis"
   },
   "build": {
     "appId": "ir.royalland.console",
@@ -17,8 +17,10 @@
     "win": {
       "icon": "build/icon.png"
     },
-    "portable": {
-      "artifactName": "RoyalConsole-${version}.exe"
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "RoyalConsole-Setup-${version}.exe"
     }
   },
   "dependencies": {
