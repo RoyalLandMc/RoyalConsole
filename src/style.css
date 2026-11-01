@@ -37,3 +37,14 @@ input{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd)
 #modal label{font-size:12px;color:var(--mu)}
 .xterm .xterm-viewport{background:var(--bg)!important}
 ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#3a3f47;border-radius:4px}::-webkit-scrollbar-track{background:transparent}
+.fb{background:var(--bg);display:flex;flex-direction:column;gap:6px;padding:8px}
+.fb.drop{outline:2px dashed var(--ac);outline-offset:-4px}
+.fbar{display:flex;gap:6px;align-items:center}
+.fbar .fpath{flex:1}
+.ferr{color:var(--mu);font-size:12px;white-space:pre-wrap;max-width:50%}.ferr.bad{color:var(--bad)}
+.flist{flex:1;overflow:auto}
+.frow{display:grid;grid-template-columns:1fr 80px 160px 190px;gap:8px;padding:4px 8px;cursor:default;user-select:none}
+.frow:hover{background:var(--p2)}
+.fact{display:flex;gap:10px;justify-content:flex-end;visibility:hidden}.frow:hover .fact{visibility:visible}
+.fact b{font-weight:400;color:var(--ac);cursor:pointer}
+.fedit{flex:1;resize:none;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:5px;padding:8px;font:13px Cascadia Mono,Consolas,monospace;tab-size:2;white-space:pre;outline:0}

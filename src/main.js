@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog } = require('electron')
 const path = require('path'), fs = require('fs'), os = require('os'), crypto = require('crypto')
 const { Client } = require('ssh2')
+const YAML = require('yaml')
 
 let win, seq = 0
 const conns = new Map(), streams = new Map()
@@ -52,6 +53,37 @@ async function run(id, cmd) {
 const STATS = `tmux ls -F '#{session_name} #{session_created} #{pane_pid}' 2>/dev/null | while read n c p; do echo "S $n $c $(ps -o %cpu=,rss= -p $p --ppid $p | awk '{c+=$1;r+=$2}END{printf "%.1f %d",c,r/1024}')"; done
 echo "H $(vmstat 1 2 | tail -1 | awk '{print 100-$15}') $(free -m | awk '/Mem/{print $3,$2}') $(df -P / | awk 'NR==2{print $5}')"`
 
+const sftps = new WeakMap()
+async function sftp(id) {
+  const c = await connect(id)
+  if (!sftps.has(c)) sftps.set(c, new Promise((res, rej) => c.sftp((e, s) => e ? (sftps.delete(c), rej(e)) : res(s))))
+  return sftps.get(c)
+}
+const P = (o, m, ...a) => new Promise((res, rej) => o[m](...a, (e, r) => e ? rej(e) : res(r)))
+const isDir = m => (m & 0o170000) === 0o040000
+const FS = {
+  home: s => P(s, 'realpath', '.'),
+  ls: async (s, d) => Promise.all((await P(s, 'readdir', d)).map(async f => {
+    let a = f.attrs
+    if ((a.mode & 0o170000) === 0o120000) a = await P(s, 'stat', path.posix.join(d, f.filename)).catch(() => a)
+    return { name: f.filename, dir: isDir(a.mode), size: a.size, mtime: a.mtime }
+  })),
+  read: (s, f) => P(s, 'readFile', f, 'utf8'),
+  write: async (s, f, t) => {
+    if (/\.ya?ml$/i.test(f)) try { YAML.parse(t) } catch (e) { return { err: e.message } }
+    await P(s, 'writeFile', f, t)
+  },
+  rename: (s, a, b) => P(s, 'rename', a, b),
+  upload: async (s, d, files) => { for (const f of files) if (fs.statSync(f).isFile()) await P(s, 'fastPut', f, path.posix.join(d, path.basename(f))) },
+  download: async (s, f) => {
+    const r = await dialog.showSaveDialog(win, { defaultPath: path.posix.basename(f) })
+    if (!r.canceled) await P(s, 'fastGet', f, r.filePath)
+  }
+}
+ipcMain.handle('fs', async (_, id, op, ...a) => {
+  if (op === 'rm') return run(id, `rm -rf -- ${q(a[0])}`)
+  return FS[op](await sftp(id), ...a)
+})
 ipcMain.handle('hosts', () => loadHosts())
 ipcMain.handle('host-save', (_, h) => { h.id ||= crypto.randomUUID(); updateHost(h); return h })
 ipcMain.handle('host-del', (_, id) => { saveHosts(loadHosts().filter(x => x.id !== id)); conns.get(id)?.then(c => c.end()).catch(() => {}) })

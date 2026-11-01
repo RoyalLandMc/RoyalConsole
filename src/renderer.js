@@ -28,6 +28,7 @@ function renderSide() {
       const run = st[h.id]?.consoles[n], k = h.id + ':' + n
       return `<div class="item ${sel === k ? 'on' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${run ? 'ok' : 'bad'}"></span>${esc(n)}</div>`
     }), `<div class="item ${sel === h.id + ':' ? 'on' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
+    `<div class="item ${active === 'files:' + h.id ? 'on' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
     `<div class="item muted" data-add="${h.id}">+ console</div>`].join('') : ''
     return `<div class="host" data-host="${h.id}"><span class="dot ${cls}"></span>${esc(h.name)}<span class="sm" data-edit="${h.id}">edit</span></div>${items}`
   }).join('') + `<div class="item muted" id="addhost">+ host</div>`
@@ -78,7 +79,7 @@ function activate(k) {
   for (const [key, t] of tabs) { t.el.hidden = key !== k; t.tab.classList.toggle('on', key === k) }
   $('#empty').hidden = tabs.size > 0
   const t = tabs.get(k)
-  if (t) { sel = k; t.fit.fit(); t.term.focus() }
+  if (t) { if (!t.files) sel = k; t.fit.fit(); t.term.focus() }
   render()
 }
 
@@ -109,6 +110,73 @@ async function openTab(id, n) {
   term.onResize(({ cols, rows }) => api.resize(t.sid, cols, rows))
 }
 
+const TXT = /\.(ya?ml|json|txt|properties|sh|log|php|conf|cfg|toml|ini|md)$/i
+const fsize = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'
+async function openFiles(id) {
+  const k = 'files:' + id
+  if (tabs.has(k)) return activate(k)
+  const el = document.createElement('div'), tab = document.createElement('div'), F = (op, ...a) => api.fs(id, op, ...a)
+  el.className = 'term fb'; $('#terms').append(el)
+  tab.className = 'tab'; tab.innerHTML = `${esc(hostOf(id).name)} / files <span class="sm">x</span>`
+  tab.onclick = e => e.target.classList.contains('sm') ? closeTab(k) : activate(k)
+  $('#tabs').append(tab)
+  const t = { el, tab, files: true, sid: 0, fit: { fit() {} }, term: { dispose() {}, focus() {} } }
+  tabs.set(k, t); activate(k)
+  let cwd = await F('home'), list = []
+  const full = n => (cwd === '/' ? '' : cwd) + '/' + n
+  const fail = e => alert(e.message || e)
+  async function ls(d = cwd) {
+    try { list = await F('ls', d); cwd = d } catch (e) { return fail(e) }
+    list.sort((a, b) => b.dir - a.dir || a.name.localeCompare(b.name))
+    el.innerHTML = `<div class="fbar"><button data-f="up">Up</button><input class="fpath" value="${esc(cwd)}"><button data-f="ref">Refresh</button></div>
+    <div class="flist">${list.map((f, i) => `<div class="frow" data-i="${i}"><span>${f.dir ? '📁' : '📄'} ${esc(f.name)}</span><span class="muted">${f.dir ? '' : fsize(f.size)}</span><span class="muted">${new Date(f.mtime * 1000).toLocaleString()}</span><span class="fact">${f.dir ? '' : '<b data-f="dl">download</b>'}<b data-f="mv">rename</b><b data-f="rm">delete</b></span></div>`).join('') || '<div class="muted" style="padding:10px">empty</div>'}</div>`
+  }
+  async function edit(f) {
+    const p = full(f.name)
+    if (f.size > 5 << 20) return alert('File too large')
+    let txt
+    try { txt = await F('read', p) } catch (e) { return fail(e) }
+    el.innerHTML = `<div class="fbar"><button data-f="back">Back</button><b class="fpath">${esc(p)}</b><span class="ferr"></span><button class="pri" data-f="save">Save</button></div><textarea class="fedit" spellcheck="false"></textarea>`
+    const ta = el.querySelector('textarea'), err = el.querySelector('.ferr')
+    ta.value = txt; ta.focus()
+    const save = async () => {
+      err.textContent = 'saving...'
+      try { const r = await F('write', p, ta.value); err.textContent = r?.err || 'saved'; err.classList.toggle('bad', !!r?.err) } catch (e) { err.textContent = e.message; err.classList.add('bad') }
+    }
+    ta.onkeydown = e => {
+      if (e.ctrlKey && e.key === 's') { e.preventDefault(); save() }
+      if (e.key === 'Tab') { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end') }
+    }
+    el.querySelector('[data-f=save]').onclick = save
+    el.querySelector('[data-f=back]').onclick = () => ls()
+  }
+  el.onclick = async e => {
+    const a = e.target.dataset.f, f = list[e.target.closest('[data-i]')?.dataset.i]
+    if (a === 'up') ls(cwd.replace(/\/[^/]*$/, '') || '/')
+    if (a === 'ref') ls()
+    if (a === 'dl') F('download', full(f.name)).catch(fail)
+    if (a === 'mv') {
+      const v = await form('Rename', [['name', 'Name']], f)
+      if (v?.name && v.name !== f.name) await F('rename', full(f.name), full(v.name)).catch(fail), ls()
+    }
+    if (a === 'rm' && confirm(`Delete ${full(f.name)}?`)) await F('rm', full(f.name)).catch(fail), ls()
+  }
+  el.ondblclick = e => {
+    const f = list[e.target.closest('[data-i]')?.dataset.i]
+    if (!f || e.target.dataset.f) return
+    f.dir ? ls(full(f.name)) : TXT.test(f.name) ? edit(f) : alert('Not a text file')
+  }
+  el.onkeydown = e => { if (e.key === 'Enter' && e.target.classList.contains('fpath')) ls(e.target.value) }
+  el.ondragover = e => { e.preventDefault(); el.classList.add('drop') }
+  el.ondragleave = () => el.classList.remove('drop')
+  el.ondrop = async e => {
+    e.preventDefault(); el.classList.remove('drop')
+    if (!el.querySelector('.flist')) return
+    await F('upload', cwd, [...e.dataTransfer.files].map(api.pathOf)).catch(fail); ls()
+  }
+  ls()
+}
+
 async function act(a) {
   const [id, n] = sel.split(/:(.*)/), h = hostOf(id), d = defOf(h, n)
   if (a === 'open') return openTab(id, n)
@@ -133,7 +201,7 @@ async function act(a) {
 }
 
 $('#side').onclick = async e => {
-  const x = e.target.closest('[data-edit],[data-host],[data-add],[data-n],#addhost')
+  const x = e.target.closest('[data-edit],[data-host],[data-add],[data-files],[data-n],#addhost')
   if (!x) return
   if (x.dataset.edit) {
     e.stopPropagation()
@@ -147,6 +215,7 @@ $('#side').onclick = async e => {
     if (v) hosts.push(await api.saveHost(v))
     return render()
   }
+  if (x.dataset.files) return openFiles(x.dataset.files)
   if (x.dataset.host) return toggleHost(x.dataset.host)
   if (x.dataset.add) {
     const h = hostOf(x.dataset.add)

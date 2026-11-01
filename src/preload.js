@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer: r } = require('electron')
+const { contextBridge, ipcRenderer: r, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
   hosts: () => r.invoke('hosts'),
@@ -12,5 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   write: (sid, d) => r.send('write', sid, d),
   resize: (sid, c, rw) => r.send('resize', sid, c, rw),
   close: sid => r.send('close', sid),
+  fs: (id, op, ...a) => r.invoke('fs', id, op, ...a),
+  pathOf: f => webUtils.getPathForFile(f),
   on: (ch, f) => r.on(ch, (_, ...a) => f(...a))
 })
