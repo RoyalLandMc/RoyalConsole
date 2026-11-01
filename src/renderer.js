@@ -1,7 +1,7 @@
 const $ = s => document.querySelector(s)
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 let hosts = [], active = null, sel = null
-const st = {}, live = {}, timers = {}, tabs = new Map(), bySid = new Map(), userStopped = new Set()
+const st = {}, live = {}, timers = {}, tabs = new Map(), bySid = new Map(), userStopped = new Set(), crashed = new Set()
 
 function form(title, fields, v = {}) {
   const m = $('#modal')
@@ -26,7 +26,7 @@ function renderSide() {
     const on = live[h.id], cls = on === true ? 'ok' : on === false ? 'bad' : ''
     const items = on ? [...consolesOf(h).map(n => {
       const run = st[h.id]?.consoles[n], k = h.id + ':' + n
-      return `<div class="item ${sel === k ? 'on' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${run ? 'ok' : 'bad'}"></span>${esc(n)}</div>`
+      return `<div class="item ${sel === k ? 'on' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
     }), `<div class="item ${sel === h.id + ':' ? 'on' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
     `<div class="item ${active === 'files:' + h.id ? 'on' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
     `<div class="item muted" data-add="${h.id}">+ console</div>`].join('') : ''
@@ -46,14 +46,21 @@ function renderInfo() {
   <div class="card"><span>Uptime</span><b>${c ? `${Math.floor(up / 3600)}h ${Math.floor(up / 60) % 60}m` : '-'}</b></div>
   <div class="btns"><button class="pri" data-a="open">Console</button><button data-a="${c ? 'stop' : 'start'}">${c ? 'Stop' : 'Start'}</button>
   <button data-a="restart">Restart</button><button data-a="kill">Kill</button><button data-a="edit">Edit</button><button data-a="remove">Remove</button></div>
-  <input id="cmd" placeholder="command to send">`
+  <input id="cmd" placeholder="command to send">
+  <div class="quick">${(h.quick || []).map((q, i) => `<button data-q="${i}" title="${esc(q)}">${esc(q)}<span class="sm" data-qx="${i}">x</span></button>`).join('')}<button class="muted" data-q="add">+ quick command</button></div>`
 }
 
 function renderFoot() {
   const id = sel?.split(':')[0], h = id && st[id]?.host
   $('#foot').innerHTML = h ? `<span>${esc(hostOf(id).name)} · ${esc(hostOf(id).host)}</span><span>CPU ${h.cpu}%</span><span>RAM ${(h.used / 1024).toFixed(1)} / ${(h.total / 1024).toFixed(1)} GB</span><span>Disk ${esc(h.disk)}</span>` : ''
 }
-const render = () => { renderSide(); renderInfo(); renderFoot() }
+function renderTabs() {
+  for (const [k, t] of tabs) {
+    const [id, n] = k.split(/:(.*)/)
+    t.tab.querySelector('.dot').className = 'dot ' + (!n ? '' : st[id]?.consoles[n] ? 'ok' : 'bad')
+  }
+}
+const render = () => { renderSide(); renderInfo(); renderFoot(); renderTabs() }
 
 async function poll(id) {
   try {
@@ -61,7 +68,9 @@ async function poll(id) {
     st[id] = await api.stats(id)
     live[id] = true
     for (const d of hostOf(id)?.consoles || []) {
-      if (prev[d.name] && !st[id].consoles[d.name] && !userStopped.delete(id + ':' + d.name))
+      const k = id + ':' + d.name
+      if (st[id].consoles[d.name]) crashed.delete(k)
+      if (prev[d.name] && !st[id].consoles[d.name] && !userStopped.delete(k) && crashed.add(k))
         new Notification('RoyalConsole', { body: `${d.name} on ${hostOf(id).name} stopped` })
     }
   } catch { live[id] = false; clearInterval(timers[id]); delete timers[id] }
@@ -95,7 +104,7 @@ async function openTab(id, n) {
   if (tabs.has(k)) return activate(k)
   const el = document.createElement('div'), tab = document.createElement('div')
   el.className = 'term'; $('#terms').append(el)
-  tab.className = 'tab'; tab.innerHTML = `${esc(hostOf(id).name)} / ${esc(n || 'shell')} <span class="sm">x</span>`
+  tab.className = 'tab'; tab.innerHTML = `<span class="dot"></span>${esc(hostOf(id).name)} / ${esc(n || 'shell')} <span class="sm">x</span>`
   tab.onclick = e => e.target.classList.contains('sm') ? closeTab(k) : activate(k)
   $('#tabs').append(tab)
   const term = new Terminal({ fontFamily: 'Cascadia Mono, Consolas, monospace', fontSize: 13, scrollback: 10000, theme: { background: '#14161a' } })
@@ -224,10 +233,31 @@ $('#side').onclick = async e => {
     return render()
   }
   sel = x.dataset.h + ':' + x.dataset.n
+  crashed.delete(sel)
   tabs.has(sel) ? activate(sel) : render()
 }
 $('#side').ondblclick = e => { const x = e.target.closest('[data-n]'); if (x) openTab(x.dataset.h, x.dataset.n) }
-$('#info').onclick = e => { const a = e.target.dataset.a; if (a) act(a) }
+$('#info').onclick = async e => {
+  const { a, q, qx } = e.target.dataset
+  if (a) return act(a)
+  const [id, n] = sel.split(/:(.*)/), h = hostOf(id)
+  if (qx) { h.quick.splice(qx, 1); await api.saveHost(h); return render() }
+  if (q === 'add') {
+    const v = await form('Quick command', [['text', 'Command', 'say restart in 5 min']])
+    if (v?.text) (h.quick ||= []).push(v.text), await api.saveHost(h)
+    return render()
+  }
+  if (q) api.action(id, 'send', { name: n, text: h.quick[q] })
+}
+$('#bc').onclick = async () => {
+  const v = await form('Broadcast', [['text', 'Command', 'save-all'], ['scope', 'Target (host / all)']], { scope: sel ? 'host' : 'all' })
+  if (!v?.text) return
+  const hid = sel?.split(':')[0], all = v.scope.trim() === 'all'
+  const to = hosts.filter(h => live[h.id] && (all || h.id === hid)).flatMap(h => Object.keys(st[h.id]?.consoles || {}).map(name => [h.id, name]))
+  if (!to.length) return alert('No running consoles')
+  if (!confirm(`Send "${v.text}" to ${to.length} console(s)?\n${to.map(([i, n]) => hostOf(i).name + ' / ' + n).join('\n')}`)) return
+  await Promise.all(to.map(([i, name]) => api.action(i, 'send', { name, text: v.text })))
+}
 $('#info').onkeydown = async e => {
   if (e.key !== 'Enter' || e.target.id !== 'cmd' || !e.target.value) return
   const [id, n] = sel.split(/:(.*)/)

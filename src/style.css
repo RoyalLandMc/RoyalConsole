@@ -48,3 +48,7 @@ input{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd)
 .fact{display:flex;gap:10px;justify-content:flex-end;visibility:hidden}.frow:hover .fact{visibility:visible}
 .fact b{font-weight:400;color:var(--ac);cursor:pointer}
 .fedit{flex:1;resize:none;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:5px;padding:8px;font:13px Cascadia Mono,Consolas,monospace;tab-size:2;white-space:pre;outline:0}
+
+.badge{margin-left:auto;background:var(--bad);color:#fff;font-size:10px;border-radius:8px;padding:1px 6px}
+.quick{display:flex;flex-direction:column;gap:5px}
+.quick button{display:flex;align-items:center;text-align:left;overflow:hidden;white-space:nowrap}

@@ -13,7 +13,13 @@
     "files": [
       "src/**",
       "node_modules/**"
-    ]
+    ],
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "RoyalConsole-${version}.exe"
+    }
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
