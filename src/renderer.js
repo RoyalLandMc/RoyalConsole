@@ -39,7 +39,7 @@ function renderSide() {
     }), `<div class="item ${sel === h.id + ':' ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
     `<div class="item ${active === 'files:' + h.id ? 'on' : ''} ${stale ? 'stale' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
     `<div class="item muted" data-add="${h.id}">+ console</div>`].join('') : ''
-    const note = wait ? `<span class="sm">${retry[h.id] ? `retry ${retry[h.id]}/3` : 'connecting…'}</span>` : on === false ? '<span class="sm">offline · retry</span>' : `<span class="sm" data-edit="${h.id}">edit</span>`
+    const note = (wait ? `<span class="sm">${retry[h.id] ? `retry ${retry[h.id]}/3` : 'connecting…'}</span>` : on === false ? '<span class="sm">offline</span>' : '') + `<span class="sm" data-edit="${h.id}">edit</span>`
     return `<div class="host" data-host="${h.id}"><span class="dot ${cls}"></span>${esc(h.name)}${note}</div>${items}`
   }).join('') + `<div class="item muted" id="addhost">+ host</div>`
 }
@@ -260,9 +260,8 @@ $('#side').onclick = async e => {
   }
   sel = x.dataset.h + ':' + x.dataset.n
   crashed.delete(sel)
-  tabs.has(sel) ? activate(sel) : render()
+  openTab(x.dataset.h, x.dataset.n)
 }
-$('#side').ondblclick = e => { const x = e.target.closest('[data-n]'); if (x) openTab(x.dataset.h, x.dataset.n) }
 $('#info').onclick = async e => {
   const { a, q, qx } = e.target.dataset
   if (a) return act(a)
