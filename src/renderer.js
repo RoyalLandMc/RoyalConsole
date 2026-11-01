@@ -27,9 +27,15 @@ function form(title, fields, v = {}) {
   })
 }
 
+const order = store('rc-order') || {}
+let sortMode = store('rc-sort') || 'az'
+const nat = (a, b) => a.localeCompare(b, undefined, { numeric: true })
 const consolesOf = h => {
   const defs = h.consoles || [], run = Object.keys((st[h.id] || cache[h.id])?.consoles || {})
-  return [...defs.map(d => d.name), ...run.filter(n => !defs.some(d => d.name === n))]
+  const all = [...defs.map(d => d.name), ...run.filter(n => !defs.some(d => d.name === n))]
+  if (sortMode === 'az') return all.sort(nat)
+  const o = order[h.id] || [], ix = n => { const i = o.indexOf(n); return i < 0 ? 1e9 : i }
+  return all.sort((a, b) => ix(a) - ix(b) || nat(a, b))
 }
 const defOf = (h, n) => (h.consoles || []).find(d => d.name === n) || { name: n }
 const col = new Set(store('rc-col') || [])
@@ -49,7 +55,7 @@ function renderSide() {
     const stale = on !== true, show = on === true || (wait && cache[h.id])
     const data = st[h.id] || cache[h.id], item = n => {
       const run = data?.consoles[n], k = h.id + ':' + n
-      return `<div class="item ${sel === k ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${stale ? '' : run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
+      return `<div class="item ${sel === k ? 'on' : ''} ${stale ? 'stale' : ''}" draggable="true" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${stale ? '' : run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
     }
     const by = {}
     for (const n of consolesOf(h).filter(n => !q || n.toLowerCase().includes(q))) (by[groupOf(h, n)] ||= []).push(n)
@@ -72,19 +78,21 @@ function renderInfo() {
   if (!sel) return box.innerHTML = ''
   const [id, n] = sel.split(/:(.*)/), h = hostOf(id), c = st[id]?.consoles[n]
   if (!n) return box.innerHTML = `<b>${esc(h.name)} shell</b><button class="pri" data-a="open">Open shell</button>`
-  const up = c ? Math.floor(Date.now() / 1000 - c.created) : 0
-  box.innerHTML = `<b>${esc(n)}</b>
-  <div class="card"><span>Status</span><b style="color:var(--${c ? 'ok' : 'bad'})">${c ? 'Running' : 'Stopped'}</b></div>
+  const up = c ? Math.floor(Date.now() / 1000 - c.created) : 0, focused = document.activeElement?.id === 'cmd', typed = $('#cmd')?.value || ''
+  const sec = (k, t, body) => `<details data-sec="${k}" ${closed.has(k) ? '' : 'open'}><summary>${t}</summary><div>${body}</div></details>`
+  box.innerHTML = `<b>${esc(n)}</b>` +
+  sec('stats', 'Stats', `<div class="card"><span>Status</span><b style="color:var(--${c ? 'ok' : 'bad'})">${c ? 'Running' : 'Stopped'}</b></div>
   <div class="card"><span>CPU · RAM</span><b>${c ? `${c.cpu}% · ${c.ram} MB` : '-'}</b></div>
-  <div class="card"><span>Uptime</span><b>${c ? `${Math.floor(up / 3600)}h ${Math.floor(up / 60) % 60}m` : '-'}</b></div>
-  <div class="btns"><button class="pri" data-a="open">Console</button><button data-a="${c ? 'stop' : 'start'}">${c ? 'Stop' : 'Start'}</button>
-  <button data-a="restart">Restart</button><button data-a="kill">Kill</button><button data-a="edit">Edit</button><button data-a="remove">Remove</button></div>
-  <input id="cmd" placeholder="command to send">
-  <div class="quick">${(h.quick || []).map((q, i) => `<button data-q="${i}" title="${esc(q)}">${esc(q)}<span class="sm" data-qx="${i}">x</span></button>`).join('')}<button class="muted" data-q="add">+ quick command</button></div>`
+  <div class="card"><span>Uptime</span><b>${c ? `${Math.floor(up / 3600)}h ${Math.floor(up / 60) % 60}m` : '-'}</b></div>`) +
+  sec('actions', 'Actions', `<div class="btns"><button class="pri" data-a="open">Console</button><button data-a="${c ? 'stop' : 'start'}">${c ? 'Stop' : 'Start'}</button>
+  <button data-a="restart">Restart</button><button data-a="kill">Kill</button><button data-a="edit">Edit</button><button data-a="remove">Remove</button></div>`) +
+  sec('send', 'Send command', `<input id="cmd" placeholder="command to send">`) +
+  sec('quick', 'Quick commands', `<div class="quick">${(h.quick || []).map((q, i) => `<button data-q="${i}" title="${esc(q)}">${esc(q)}<span class="sm" data-qx="${i}">x</span></button>`).join('')}<button class="muted" data-q="add">+ quick command</button></div>`)
+  const ci = $('#cmd'); if (ci) { ci.value = typed; if (focused) ci.focus() }
 }
 
 function renderFoot() {
-  const id = sel?.split(':')[0], h = id && st[id]?.host
+  const id = sel?.split(':')[0] || hosts.find(x => live[x.id] === true)?.id, h = id && st[id]?.host
   $('#foot').innerHTML = h ? `<span>${esc(hostOf(id).name)} · ${esc(hostOf(id).host)}</span><span>CPU ${h.cpu}%</span><span>RAM ${(h.used / 1024).toFixed(1)} / ${(h.total / 1024).toFixed(1)} GB</span><span>Disk ${esc(h.disk)}</span>` : ''
 }
 function renderTabs() {
@@ -313,14 +321,54 @@ $('#info').onclick = async e => {
   }
   if (q) api.action(id, 'send', { name: n, text: h.quick[q] })
 }
-$('#bc').onclick = async () => {
-  const v = await form('Broadcast', [['text', 'Command', 'save-all'], ['scope', 'Target (host / all)']], { scope: sel ? 'host' : 'all' })
-  if (!v?.text) return
-  const hid = sel?.split(':')[0], all = v.scope.trim() === 'all'
-  const to = hosts.filter(h => live[h.id] && (all || h.id === hid)).flatMap(h => Object.keys(st[h.id]?.consoles || {}).map(name => [h.id, name]))
-  if (!to.length) return toast('No running consoles')
-  if (!confirm(`Send "${v.text}" to ${to.length} console(s)?\n${to.map(([i, n]) => hostOf(i).name + ' / ' + n).join('\n')}`)) return
-  await Promise.all(to.map(([i, name]) => api.action(i, 'send', { name, text: v.text })))
+$('#bc').onclick = () => {
+  const on = hosts.filter(h => live[h.id] === true)
+  if (!on.length) return toast('Connect to a host first')
+  const hist = store('rc-bc') || [], picked = new Set(store('rc-bc-sel') || [])
+  const rows = on.map(h => {
+    const by = {}
+    for (const n of consolesOf(h).filter(n => st[h.id]?.consoles[n])) (by[groupOf(h, n)] ||= []).push(n)
+    const cb = (cls, attrs, label, chk) => `<label class="${cls}"><input type="checkbox" ${attrs} ${chk ? 'checked' : ''}>${label}</label>`
+    return cb('lh', `data-lh="${h.id}"`, esc(h.name)) + Object.entries(by).map(([g, list]) =>
+      (g ? cb('lg', `data-lg="${h.id}/${esc(g)}"`, esc(g)) : '') + list.map(n => cb('lc', `data-c="${h.id}" data-g="${h.id}/${esc(g)}" value="${esc(n)}"`, esc(n), picked.has(h.id + ':' + n))).join('')).join('')
+  }).join('')
+  const m = $('#modal')
+  m.innerHTML = `<div class="bc"><b>Broadcast</b>
+    <label>Command<input id="bct" list="bch" placeholder="say Restart in 5 minutes"><datalist id="bch">${hist.map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
+    <div class="row"><button type="button" data-s="all">All</button><button type="button" data-s="none">None</button><span class="muted" id="bcn"></span><label class="row" style="margin-left:auto">Delay (s)<input id="bcd" type="number" min="0" value="0" style="width:70px"></label></div>
+    <div class="bcl">${rows || '<div class="muted">No running consoles</div>'}</div>
+    <div class="btns"><button type="button" id="bcx">Cancel</button><button class="pri" id="bcs">Send</button></div></div>`
+  m.hidden = false; $('#bct').focus()
+  const boxes = () => [...m.querySelectorAll('input[data-c]')]
+  const sync = () => {
+    for (const g of m.querySelectorAll('[data-lg]')) { const b = boxes().filter(x => x.dataset.g === g.dataset.lg); g.checked = b.every(x => x.checked); g.indeterminate = !g.checked && b.some(x => x.checked) }
+    for (const h of m.querySelectorAll('[data-lh]')) { const b = boxes().filter(x => x.dataset.c === h.dataset.lh); h.checked = b.length && b.every(x => x.checked); h.indeterminate = !h.checked && b.some(x => x.checked) }
+    $('#bcn').textContent = boxes().filter(x => x.checked).length + ' selected'
+  }
+  m.onchange = e => {
+    const t = e.target
+    if (t.dataset.lh) boxes().filter(x => x.dataset.c === t.dataset.lh).forEach(x => x.checked = t.checked)
+    if (t.dataset.lg) boxes().filter(x => x.dataset.g === t.dataset.lg).forEach(x => x.checked = t.checked)
+    sync()
+  }
+  m.onclick = async e => {
+    const s = e.target.dataset.s
+    if (s) { boxes().forEach(x => x.checked = s === 'all'); return sync() }
+    if (e.target.id === 'bcx') { m.hidden = true; m.onclick = m.onchange = null }
+    if (e.target.id !== 'bcs') return
+    const text = $('#bct').value.trim(), to = boxes().filter(x => x.checked).map(x => [x.dataset.c, x.value]), delay = Math.max(0, +$('#bcd').value || 0)
+    if (!text) return toast('Type a command')
+    if (!to.length) return toast('Pick at least one console')
+    store('rc-bc', [text, ...hist.filter(x => x !== text)].slice(0, 15)); store('rc-bc-sel', to.map(([i, n]) => i + ':' + n))
+    m.hidden = true; m.onclick = m.onchange = null
+    let ok = 0
+    for (const [i, name] of to) {
+      try { await api.action(i, 'send', { name, text }); ok++ } catch (err) { toast(`${name}: ${msg(err)}`) }
+      if (delay) await new Promise(r => setTimeout(r, delay * 1000))
+    }
+    toast(`Sent to ${ok}/${to.length} console(s)`, ok !== to.length)
+  }
+  sync()
 }
 $('#info').onkeydown = async e => {
   if (e.key !== 'Enter' || e.target.id !== 'cmd' || !e.target.value) return
@@ -337,4 +385,42 @@ api.on('host-closed', id => { if (live[id] !== true) return; clearInterval(timer
 api.on('host-retry', (id, n) => { retry[id] = n; render() })
 
 $('#q').oninput = renderSide
+const closed = new Set(store('rc-closed') || [])
+$('#info').addEventListener('toggle', e => { const k = e.target.dataset?.sec; if (!k) return; e.target.open ? closed.delete(k) : closed.add(k); store('rc-closed', [...closed]) }, true)
+const W = store('rc-w') || { side: 220, info: 220 }, ui = store('rc-ui') || {}
+const applyUi = () => {
+  $('#side').style.width = W.side + 'px'; $('#info').style.width = W.info + 'px'
+  document.body.classList.toggle('noside', !!ui.noside); document.body.classList.toggle('noinfo', !!ui.noinfo)
+  $('#tside').classList.toggle('on', !ui.noside); $('#tinfo').classList.toggle('on', !ui.noinfo); $('#sort').textContent = sortMode === 'az' ? 'A-Z' : 'Custom'
+  requestAnimationFrame(() => tabs.get(active)?.fit.fit())
+}
+$('#tside').onclick = () => { ui.noside = !ui.noside; store('rc-ui', ui); applyUi() }
+$('#tinfo').onclick = () => { ui.noinfo = !ui.noinfo; store('rc-ui', ui); applyUi() }
+$('#sort').onclick = () => { sortMode = sortMode === 'az' ? 'custom' : 'az'; store('rc-sort', sortMode); applyUi(); renderSide() }
+document.querySelectorAll('.split').forEach(s => s.onmousedown = e => {
+  e.preventDefault(); s.classList.add('drag'); document.body.classList.add('dragging')
+  const move = ev => {
+    W[s.dataset.for] = Math.min(600, Math.max(140, s.dataset.for === 'side' ? ev.clientX - $('#side').getBoundingClientRect().left : window.innerWidth - ev.clientX))
+    applyUi()
+  }
+  const up = () => { s.classList.remove('drag'); document.body.classList.remove('dragging'); removeEventListener('mousemove', move); removeEventListener('mouseup', up); store('rc-w', W) }
+  addEventListener('mousemove', move); addEventListener('mouseup', up)
+})
+let drag = null
+$('#tree').addEventListener('dragstart', e => { const x = e.target.closest('[data-n][draggable]'); drag = x && { h: x.dataset.h, n: x.dataset.n }; e.dataTransfer.effectAllowed = 'move' })
+$('#tree').addEventListener('dragover', e => {
+  const x = e.target.closest('[data-n][draggable]')
+  document.querySelectorAll('.dragover').forEach(y => y !== x && y.classList.remove('dragover'))
+  if (drag && x && x.dataset.h === drag.h) { e.preventDefault(); x.classList.add('dragover') }
+})
+$('#tree').addEventListener('drop', e => {
+  const x = e.target.closest('[data-n][draggable]')
+  if (!drag || !x || x.dataset.h !== drag.h || x.dataset.n === drag.n) return
+  e.preventDefault()
+  const h = hostOf(drag.h), list = consolesOf(h).filter(n => n !== drag.n)
+  list.splice(list.indexOf(x.dataset.n), 0, drag.n)
+  order[h.id] = list; store('rc-order', order); sortMode = 'custom'; store('rc-sort', sortMode); applyUi(); renderSide()
+})
+$('#tree').addEventListener('dragend', () => { drag = null; document.querySelectorAll('.dragover').forEach(y => y.classList.remove('dragover')) })
+applyUi()
 api.hosts().then(h => { hosts = h; render(); h.filter(x => openHosts.has(x.id)).forEach(x => connectHost(x.id)) })
