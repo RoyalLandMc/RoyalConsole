@@ -13,7 +13,12 @@ function toast(t, bad = true) {
 
 function form(title, fields, v = {}) {
   const m = $('#modal')
-  m.innerHTML = `<form><b>${esc(title)}</b>${fields.map(([k, l, ph]) => `<label>${esc(l)}<input name="${k}" value="${esc(v[k])}" placeholder="${esc(ph || '')}"></label>`).join('')}<div class="btns"><button type="button" id="cancel">Cancel</button><button class="pri">Save</button></div></form>`
+  const inp = ([k, , ph, type, opts]) => type === 'select'
+    ? `<select name="${k}">${opts.map(o => `<option ${(v[k] || opts[0]) === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+    : `<input name="${k}" type="${type || 'text'}" value="${type === 'password' ? '' : esc(v[k])}" placeholder="${esc(ph || '')}">`
+  m.innerHTML = `<form><b>${esc(title)}</b>${fields.map(f => `<label ${f[5] ? `data-show="${f[5]}"` : ''}>${esc(f[1])}${inp(f)}</label>`).join('')}<div class="btns"><button type="button" id="cancel">Cancel</button><button class="pri">Save</button></div></form>`
+  const sync = () => { const a = m.querySelector('[name=auth]')?.value; m.querySelectorAll('[data-show]').forEach(l => l.hidden = l.dataset.show !== a) }
+  m.querySelector('[name=auth]')?.addEventListener('change', sync); sync()
   m.hidden = false
   m.querySelector('input').focus()
   return new Promise(res => {
@@ -27,18 +32,36 @@ const consolesOf = h => {
   return [...defs.map(d => d.name), ...run.filter(n => !defs.some(d => d.name === n))]
 }
 const defOf = (h, n) => (h.consoles || []).find(d => d.name === n) || { name: n }
+const col = new Set(store('rc-col') || [])
+const groupOf = (h, n) => defOf(h, n).group || (h.groups || []).find(g => { try { return g.match && new RegExp(g.match).test(n) } catch { return false } })?.name || ''
+const saved = h => h.hasSecret ? 'saved, leave empty to keep' : ''
+const hostForm = (t, h = {}) => form(t, [['name', 'Name', 'my server'], ['host', 'Address', 'example.com'], ['port', 'Port', '22'], ['user', 'User', 'root'],
+  ['auth', 'Login with', '', 'select', ['key', 'password', 'agent']], ['key', 'Private key file', 'empty = ~/.ssh/id_ed25519', 'text', 0, 'key'],
+  ['passphrase', 'Key passphrase', saved(h) || 'only if the key has one', 'password', 0, 'key'], ['password', 'Password', saved(h), 'password', 0, 'password']], h)
+const consoleForm = (t, d = {}) => form(t, [['name', 'Name', 'survival'], ['group', 'Group', 'optional'], ['dir', 'Folder', '~/server'], ['cmd', 'Start command', './start.sh'], ['stop', 'Stop command', 'stop']], d)
+const groupForm = (t, g = {}) => form(t, [['name', 'Name (empty = delete)', 'survival'], ['match', 'Consoles matching (regex)', '^survival\\d+$'], ['panel', 'Panel command', 'cd ~/server && ./manage.sh']], g)
 const hostOf = id => hosts.find(h => h.id === id)
 
 function renderSide() {
-  $('#side').innerHTML = hosts.map(h => {
+  const q = $('#q').value.trim().toLowerCase()
+  $('#tree').innerHTML = hosts.map(h => {
     const on = live[h.id], wait = on === 'wait', cls = on === true ? 'ok' : on === false ? 'bad' : wait ? 'warn pulse' : ''
     const stale = on !== true, show = on === true || (wait && cache[h.id])
-    const items = show ? [...consolesOf(h).map(n => {
-      const run = (st[h.id] || cache[h.id])?.consoles[n], k = h.id + ':' + n
+    const data = st[h.id] || cache[h.id], item = n => {
+      const run = data?.consoles[n], k = h.id + ':' + n
       return `<div class="item ${sel === k ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n="${esc(n)}"><span class="dot ${stale ? '' : run ? 'ok' : 'bad'}"></span>${esc(n)}${crashed.has(k) ? '<span class="badge">crashed</span>' : ''}</div>`
-    }), `<div class="item ${sel === h.id + ':' ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
+    }
+    const by = {}
+    for (const n of consolesOf(h).filter(n => !q || n.toLowerCase().includes(q))) (by[groupOf(h, n)] ||= []).push(n)
+    const gs = [...new Set([...(h.groups || []).map(g => g.name), ...Object.keys(by).filter(Boolean)])]
+    const head = g => {
+      const k = h.id + '/' + g, list = by[g] || [], def = (h.groups || []).find(x => x.name === g)
+      if (q && !list.length) return ''
+      return `<div class="group" data-g="${esc(g)}" data-gh="${h.id}"><span class="caret">${col.has(k) ? '▸' : '▾'}</span>${esc(g)}<span class="cnt">${list.filter(n => data?.consoles[n]).length}/${list.length}</span>${def?.panel ? '<span class="sm" data-panel="1">panel</span>' : ''}${def ? '<span class="sm" data-gedit="1">edit</span>' : ''}</div>` + (col.has(k) && !q ? '' : list.map(item).join(''))
+    }
+    const items = show ? [gs.map(head).join(''), ...(by[''] || []).map(item), `<div class="item ${sel === h.id + ':' ? 'on' : ''} ${stale ? 'stale' : ''}" data-h="${h.id}" data-n=""><span class="dot"></span>shell</div>`,
     `<div class="item ${active === 'files:' + h.id ? 'on' : ''} ${stale ? 'stale' : ''}" data-files="${h.id}"><span class="dot"></span>files</div>`,
-    `<div class="item muted" data-add="${h.id}">+ console</div>`].join('') : ''
+    `<div class="item muted" data-add="${h.id}">+ console</div><div class="item muted" data-addg="${h.id}">+ group</div>`].join('') : ''
     const note = (wait ? `<span class="sm">${retry[h.id] ? `retry ${retry[h.id]}/3` : 'connecting…'}</span>` : on === false ? '<span class="sm">offline</span>' : '') + `<span class="sm" data-edit="${h.id}">edit</span>`
     return `<div class="host" data-host="${h.id}"><span class="dot ${cls}"></span>${esc(h.name)}${note}</div>${items}`
   }).join('') + `<div class="item muted" id="addhost">+ host</div>`
@@ -66,8 +89,8 @@ function renderFoot() {
 }
 function renderTabs() {
   for (const [k, t] of tabs) {
-    const [id, n] = k.split(/:(.*)/)
-    t.tab.querySelector('.dot').className = 'dot ' + (!n ? '' : st[id]?.consoles[n] ? 'ok' : 'bad')
+    const [id, n] = k.split(/:(.*)/), d = t.tab.querySelector('.dot')
+    if (d && !t.panel) d.className = 'dot ' + (!n ? '' : st[id]?.consoles[n] ? 'ok' : 'bad')
   }
 }
 const render = () => { renderSide(); renderInfo(); renderFoot(); renderTabs() }
@@ -111,7 +134,7 @@ function activate(k) {
   for (const [key, t] of tabs) { t.el.hidden = key !== k; t.tab.classList.toggle('on', key === k) }
   $('#empty').hidden = tabs.size > 0
   const t = tabs.get(k)
-  if (t) { if (!t.files) sel = k; t.fit.fit(); t.term.focus() }
+  if (t) { if (!t.files && !t.panel) sel = k; t.fit.fit(); t.term.focus() }
   render()
 }
 
@@ -122,22 +145,22 @@ function closeTab(k) {
   activate([...tabs.keys()].pop() || null)
 }
 
-async function openTab(id, n) {
-  const k = id + ':' + n
+async function openTab(id, n, o = {}) {
+  const k = o.key || id + ':' + n
   if (tabs.has(k)) return activate(k)
   const el = document.createElement('div'), tab = document.createElement('div')
   el.className = 'term'; $('#terms').append(el)
-  tab.className = 'tab'; tab.innerHTML = `<span class="dot"></span>${esc(hostOf(id).name)} / ${esc(n || 'shell')} <span class="sm">x</span>`
+  tab.className = 'tab'; tab.innerHTML = `<span class="dot"></span>${esc(hostOf(id).name)} / ${esc(o.title || n || 'shell')} <span class="sm">x</span>`
   tab.onclick = e => e.target.classList.contains('sm') ? closeTab(k) : activate(k)
   $('#tabs').append(tab)
   const term = new Terminal({ fontFamily: 'Cascadia Mono, Consolas, monospace', fontSize: 13, scrollback: 10000, theme: { background: '#14161a' } })
   const fit = new FitAddon.FitAddon()
   term.loadAddon(fit); term.open(el)
   term.attachCustomKeyEventHandler(e => !(e.ctrlKey && /^[1-9]$/.test(e.key)))
-  const t = { el, tab, term, fit, sid: 0 }
+  const t = { el, tab, term, fit, sid: 0, panel: !!o.cmd }
   tabs.set(k, t); activate(k)
   term.write('\x1b[90mconnecting…\x1b[0m\r\n')
-  try { t.sid = await api.open(id, n || null, term.cols, term.rows) } catch (e) { term.write(`\x1b[31m${msg(e)}\x1b[0m\r\n`); return }
+  try { t.sid = await api.open(id, o.cmd ? { cmd: o.cmd } : n || null, term.cols, term.rows) } catch (e) { term.write(`\x1b[31m${msg(e)}\x1b[0m\r\n`); return }
   bySid.set(t.sid, t)
   term.onData(d => api.write(t.sid, d))
   term.onResize(({ cols, rows }) => api.resize(t.sid, cols, rows))
@@ -216,7 +239,7 @@ async function act(a) {
   if (a === 'edit' || a === 'remove') {
     h.consoles = (h.consoles || []).filter(x => x.name !== n)
     if (a === 'edit') {
-      const v = await form('Console', [['name', 'Name'], ['dir', 'Folder', '~/skyblock'], ['cmd', 'Start command', './start.sh'], ['stop', 'Stop command', 'stop']], d)
+      const v = await consoleForm('Console', d)
       if (v) { h.consoles.push(v); sel = id + ':' + v.name } else h.consoles.push(d)
     }
     await api.saveHost(h); return render()
@@ -236,17 +259,33 @@ async function act(a) {
 }
 
 $('#side').onclick = async e => {
-  const x = e.target.closest('[data-edit],[data-host],[data-add],[data-files],[data-n],#addhost')
+  const x = e.target.closest('[data-panel],[data-gedit],[data-edit],[data-host],[data-addg],[data-add],[data-files],[data-g],[data-n],#addhost')
   if (!x) return
+  const gr = x.closest('.group'), gh = gr && hostOf(gr.dataset.gh), gname = gr?.dataset.g
+  if (x.dataset.panel) { const g = gh.groups.find(y => y.name === gname); return openTab(gh.id, '', { key: 'panel:' + gh.id + ':' + gname, title: gname + ' panel', cmd: g.panel }) }
+  if (x.dataset.gedit) {
+    const g = gh.groups.find(y => y.name === gname), v = await groupForm('Group', g)
+    if (v) { v.name ? Object.assign(g, v) : gh.groups.splice(gh.groups.indexOf(g), 1); await api.saveHost(gh) }
+    return render()
+  }
+  if (x.dataset.addg) {
+    const h = hostOf(x.dataset.addg), v = await groupForm('New group')
+    if (v?.name) (h.groups ||= []).push(v), await api.saveHost(h)
+    return render()
+  }
+  if (x === gr) {
+    const k = gh.id + '/' + gname
+    col.has(k) ? col.delete(k) : col.add(k); store('rc-col', [...col]); return renderSide()
+  }
   if (x.dataset.edit) {
     e.stopPropagation()
     const h = hostOf(x.dataset.edit)
-    const v = await form('Host', [['name', 'Name'], ['host', 'Address'], ['port', 'Port', '22'], ['user', 'User'], ['key', 'Private key', 'empty = ~/.ssh/id_ed25519']], h)
-    if (v) Object.assign(h, v), await api.saveHost(h)
+    const v = await hostForm('Host', h)
+    if (v) Object.assign(h, await api.saveHost({ ...h, ...v }))
     return render()
   }
   if (x.id === 'addhost') {
-    const v = await form('New host', [['name', 'Name', 'skyblock vps'], ['host', 'Address', '217.18.90.6'], ['port', 'Port', '22'], ['user', 'User', 'root'], ['key', 'Private key', 'empty = ~/.ssh/id_ed25519']])
+    const v = await hostForm('New host')
     if (v) hosts.push(await api.saveHost(v))
     return render()
   }
@@ -254,7 +293,7 @@ $('#side').onclick = async e => {
   if (x.dataset.host) return toggleHost(x.dataset.host)
   if (x.dataset.add) {
     const h = hostOf(x.dataset.add)
-    const v = await form('New console', [['name', 'Name', 'lobby1'], ['dir', 'Folder', '~/skyblock'], ['cmd', 'Start command', './start.sh'], ['stop', 'Stop command', 'stop']])
+    const v = await consoleForm('New console')
     if (v) (h.consoles ||= []).push(v), await api.saveHost(h)
     return render()
   }
@@ -297,4 +336,5 @@ api.on('exit', sid => bySid.get(sid)?.term.write('\r\n\x1b[90m[closed]\x1b[0m\r\
 api.on('host-closed', id => { if (live[id] !== true) return; clearInterval(timers[id]); delete timers[id]; toast(`${hostOf(id).name}: connection lost, reconnecting`); connectHost(id) })
 api.on('host-retry', (id, n) => { retry[id] = n; render() })
 
+$('#q').oninput = renderSide
 api.hosts().then(h => { hosts = h; render(); h.filter(x => openHosts.has(x.id)).forEach(x => connectHost(x.id)) })

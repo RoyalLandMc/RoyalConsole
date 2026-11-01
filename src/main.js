@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron')
 const path = require('path'), fs = require('fs'), os = require('os'), crypto = require('crypto')
 const { Client } = require('ssh2')
 const YAML = require('yaml')
@@ -17,16 +17,22 @@ function updateHost(h) {
   saveHosts(all)
 }
 
+const secretOf = h => { try { return h.secret ? JSON.parse(safeStorage.decryptString(Buffer.from(h.secret, 'base64'))) : {} } catch { return {} } }
+const authOf = (h, s) => h.auth === 'password' ? { password: s.password, tryKeyboard: true }
+  : h.auth === 'agent' ? { agent: process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : process.env.SSH_AUTH_SOCK }
+  : { privateKey: fs.readFileSync(h.key || path.join(os.homedir(), '.ssh', 'id_ed25519')), passphrase: s.passphrase || undefined }
+
 function dial(h) {
+  const sec = secretOf(h)
   return new Promise((res, rej) => {
     const c = new Client()
     let ready = false
     c.on('ready', () => { ready = true; res(c) })
       .on('error', e => { c.end(); rej(e) })
       .on('close', () => { if (ready) { conns.delete(h.id); send('host-closed', h.id) } })
+      .on('keyboard-interactive', (n, i, l, p, finish) => finish(p.map(() => sec.password || '')))
     c.connect({
-      host: h.host, port: +h.port || 22, username: h.user,
-      privateKey: fs.readFileSync(h.key || path.join(os.homedir(), '.ssh', 'id_ed25519')),
+      host: h.host, port: +h.port || 22, username: h.user, ...authOf(h, sec),
       keepaliveInterval: 15000, keepaliveCountMax: 4, readyTimeout: 30000,
       hostVerifier: k => {
         const fp = crypto.createHash('sha256').update(k).digest('base64')
@@ -44,7 +50,7 @@ function connect(id) {
   const p = (async () => {
     for (let i = 1; ; i++) {
       try { return await dial(h) } catch (e) {
-        if (i >= 3 || /authentication|verification|ENOENT/i.test(e.message)) { conns.delete(id); throw e }
+        if (i >= 3 || /authentication|verification|ENOENT|passphrase|encrypted|agent/i.test(e.message)) { conns.delete(id); throw e }
         send('host-retry', id, i + 1)
         await new Promise(r => setTimeout(r, 1500 * i))
       }
@@ -98,8 +104,19 @@ ipcMain.handle('fs', async (_, id, op, ...a) => {
   if (op === 'rm') return run(id, `rm -rf -- ${q(a[0])}`)
   return FS[op](await sftp(id), ...a)
 })
-ipcMain.handle('hosts', () => loadHosts())
-ipcMain.handle('host-save', (_, h) => { h.id ||= crypto.randomUUID(); updateHost(h); return h })
+const pub = h => { const { secret, ...r } = h; return { ...r, hasSecret: !!secret } }
+ipcMain.handle('hosts', () => loadHosts().map(pub))
+ipcMain.handle('host-save', (_, h) => {
+  h.id ||= crypto.randomUUID()
+  const old = loadHosts().find(x => x.id === h.id) || {}, sec = secretOf(old)
+  if (h.password) sec.password = h.password
+  if (h.passphrase) sec.passphrase = h.passphrase
+  delete h.password; delete h.passphrase; delete h.hasSecret
+  if (Object.keys(sec).length) h.secret = safeStorage.encryptString(JSON.stringify(sec)).toString('base64')
+  if (old.host !== h.host || old.port !== h.port) { delete h.fp; const p = conns.get(h.id); conns.delete(h.id); p?.then(c => c.end()).catch(() => {}) } else h.fp = old.fp
+  updateHost(h)
+  return pub(h)
+})
 ipcMain.handle('host-del', (_, id) => { saveHosts(loadHosts().filter(x => x.id !== id)); conns.get(id)?.then(c => c.end()).catch(() => {}) })
 ipcMain.handle('connect', async (_, id) => { await connect(id); return true })
 ipcMain.handle('disconnect', async (_, id) => { const p = conns.get(id); conns.delete(id); (await p?.catch(() => null))?.end() })
@@ -126,7 +143,7 @@ ipcMain.handle('action', (_, id, act, c) => {
   return run(id, cmds[act])
 })
 
-ipcMain.handle('open', async (_, id, name, cols, rows) => {
+ipcMain.handle('open', async (_, id, spec, cols, rows) => {
   const c = await connect(id), sid = ++seq, pty = { term: 'xterm-256color', cols, rows }
   const cb = (e, s) => {
     if (e) return send('data', sid, `\r\n${e.message}\r\n`)
@@ -134,7 +151,7 @@ ipcMain.handle('open', async (_, id, name, cols, rows) => {
     s.on('data', d => send('data', sid, d.toString('utf8'))).stderr.on('data', d => send('data', sid, d.toString('utf8')))
     s.on('close', () => { streams.delete(sid); send('exit', sid) })
   }
-  name ? c.exec(`tmux attach -t ${q(name)}`, { pty }, cb) : c.shell(pty, cb)
+  spec?.cmd ? c.exec(spec.cmd, { pty }, cb) : spec ? c.exec(`tmux attach -t ${q(spec)}`, { pty }, cb) : c.shell(pty, cb)
   return sid
 })
 ipcMain.on('write', (_, sid, d) => streams.get(sid)?.write(d))

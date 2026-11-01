@@ -59,3 +59,12 @@ input{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd)
 .pulse{animation:pl 1s infinite}
 @keyframes pl{50%{opacity:.25}}
 @keyframes tin{from{transform:translateY(8px);opacity:0}}
+#q{margin:2px 8px 6px;width:calc(100% - 16px)}
+.group{padding:5px 12px 5px 14px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--mu);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.group:hover{background:var(--p2)}
+.group .caret{width:10px}
+.group .cnt{font-size:11px;text-transform:none}
+.group .sm{margin-left:0;text-transform:none}
+.group .sm:first-of-type{margin-left:auto}
+select{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:5px;padding:6px 8px;font:inherit}
+label[hidden]{display:none}
