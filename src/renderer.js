@@ -177,9 +177,9 @@ async function openTab(id, n, o = {}) {
   const paste = async () => { const s = await api.paste(); if (s) term.paste(s) }
   term.attachCustomKeyEventHandler(e => {
     if (e.ctrlKey && (/^[1-9]$/.test(e.key) || e.key === 'Tab' || e.key === 'PageUp' || e.key === 'PageDown')) return false
-    const key = e.key.toLowerCase(), mine = e.ctrlKey && (key === 'v' || (key === 'c' && (e.shiftKey || term.hasSelection())))
+    const key = e.key.toLowerCase(), mine = e.ctrlKey && (key === 'v' || (key === 'c' && (e.shiftKey || term.hasSelection() || t.tmux)))
     if (!mine) return true
-    if (e.type === 'keydown') key === 'v' ? paste() : copy()
+    if (e.type === 'keydown') key === 'v' ? paste() : copy() || toast('Nothing selected. Ctrl+C is blocked in server consoles so the server is not stopped by accident.')
     return false
   })
   el.addEventListener('contextmenu', e => { e.preventDefault(); copy() || paste() })
