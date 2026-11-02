@@ -126,6 +126,7 @@ async function connectHost(id) {
   live[id] = 'wait'; delete retry[id]; openHosts.add(id); store('rc-open', [...openHosts]); render()
   try {
     await api.connect(id); live[id] = true; delete retry[id]
+    for (const [k, t] of tabs) if (k.startsWith(id + ':') && t.pending) { t.pending = false; t.reattach() }
     await poll(id); timers[id] = setInterval(() => poll(id), 3000)
   } catch (e) { live[id] = false; delete retry[id]; render(); toast(`${hostOf(id)?.name}: ${msg(e)}`) }
 }
@@ -138,13 +139,19 @@ function toggleHost(id) {
 }
 
 function activate(k) {
+  if (active === k && tabs.get(k) && !tabs.get(k).el.hidden) return tabs.get(k).term.focus()
   active = k
   for (const [key, t] of tabs) { t.el.hidden = key !== k; t.tab.classList.toggle('on', key === k) }
   $('#empty').hidden = tabs.size > 0
   const t = tabs.get(k)
-  if (t) { if (!t.files && !t.panel) sel = k; t.fit.fit(); t.term.focus() }
+  if (t) {
+    if (!t.files && !t.panel) sel = k
+    t.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    requestAnimationFrame(() => { t.fit.fit(); t.term.focus() })
+  }
   render()
 }
+const cycle = d => { const ks = [...tabs.keys()]; if (ks.length) activate(ks[(ks.indexOf(active) + d + ks.length) % ks.length]) }
 
 function closeTab(k) {
   const t = tabs.get(k)
@@ -160,18 +167,49 @@ async function openTab(id, n, o = {}) {
   el.className = 'term'; $('#terms').append(el)
   tab.className = 'tab'; tab.innerHTML = `<span class="dot"></span>${esc(hostOf(id).name)} / ${esc(o.title || n || 'shell')} <span class="sm">x</span>`
   tab.onclick = e => e.target.classList.contains('sm') ? closeTab(k) : activate(k)
+  tab.onauxclick = e => e.button === 1 && closeTab(k)
   $('#tabs').append(tab)
   const term = new Terminal({ fontFamily: 'Cascadia Mono, Consolas, monospace', fontSize: 13, scrollback: 10000, theme: { background: '#14161a' } })
   const fit = new FitAddon.FitAddon()
   term.loadAddon(fit); term.open(el)
-  term.attachCustomKeyEventHandler(e => !(e.ctrlKey && /^[1-9]$/.test(e.key)))
-  const t = { el, tab, term, fit, sid: 0, panel: !!o.cmd }
+  const t = { el, tab, term, fit, sid: 0, panel: !!o.cmd, tmux: !o.cmd && !!n, scrolled: false, closed: true }
+  const copy = () => { const s = term.getSelection(); if (s) { api.copy(s); term.clearSelection(); toast('Copied', false) } return !!s }
+  const paste = async () => { const s = await api.paste(); if (s) term.paste(s) }
+  term.attachCustomKeyEventHandler(e => {
+    if (e.ctrlKey && (/^[1-9]$/.test(e.key) || e.key === 'Tab' || e.key === 'PageUp' || e.key === 'PageDown')) return false
+    const key = e.key.toLowerCase(), mine = e.ctrlKey && (key === 'v' || (key === 'c' && (e.shiftKey || term.hasSelection())))
+    if (!mine) return true
+    if (e.type === 'keydown') key === 'v' ? paste() : copy()
+    return false
+  })
+  el.addEventListener('contextmenu', e => { e.preventDefault(); copy() || paste() })
+  let wheel = 0, wt = 0
+  term.attachCustomWheelEventHandler(e => {
+    if (!t.tmux || term.buffer.active.type !== 'alternate') return true
+    wheel += Math.sign(e.deltaY) * 3
+    clearTimeout(wt); wt = setTimeout(() => {
+      const d = wheel; wheel = 0
+      if (d < 0) t.scrolled = true
+      if (d < 0 || t.scrolled) api.scroll(id, n, d)
+    }, 40)
+    return false
+  })
+  const attach = async () => {
+    t.closed = false
+    try { t.sid = await api.open(id, o.cmd ? { cmd: o.cmd } : n || null, term.cols, term.rows) } catch (e) { t.closed = true; term.write(`\x1b[31m${msg(e)}\x1b[0m\r\n\x1b[90mpress Enter to retry\x1b[0m\r\n`); return }
+    bySid.set(t.sid, t)
+  }
+  t.reattach = () => { term.reset(); term.write('\x1b[90mreconnecting…\x1b[0m\r\n'); return attach() }
+  term.onData(d => {
+    if (t.closed) return d === '\r' && t.reattach()
+    if (t.scrolled) { t.scrolled = false; api.cancel(id, n) }
+    api.write(t.sid, d)
+  })
+  term.onResize(({ cols, rows }) => !t.closed && api.resize(t.sid, cols, rows))
   tabs.set(k, t); activate(k)
   term.write('\x1b[90mconnecting…\x1b[0m\r\n')
-  try { t.sid = await api.open(id, o.cmd ? { cmd: o.cmd } : n || null, term.cols, term.rows) } catch (e) { term.write(`\x1b[31m${msg(e)}\x1b[0m\r\n`); return }
-  bySid.set(t.sid, t)
-  term.onData(d => api.write(t.sid, d))
-  term.onResize(({ cols, rows }) => api.resize(t.sid, cols, rows))
+  await new Promise(r => requestAnimationFrame(r)); fit.fit()
+  attach()
 }
 
 const TXT = /\.(ya?ml|json|txt|properties|sh|log|php|conf|cfg|toml|ini|md)$/i
@@ -377,11 +415,20 @@ $('#info').onkeydown = async e => {
 }
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && /^[1-9]$/.test(e.key)) { const k = [...tabs.keys()][e.key - 1]; if (k) activate(k) }
+  if (e.ctrlKey && (e.key === 'Tab' || e.key === 'PageDown' || e.key === 'PageUp')) { e.preventDefault(); cycle(e.key === 'PageUp' || e.shiftKey ? -1 : 1) }
+  if (e.ctrlKey && e.key.toLowerCase() === 'w' && active) { e.preventDefault(); closeTab(active) }
 })
 window.addEventListener('resize', () => tabs.get(active)?.fit.fit())
 api.on('data', (sid, d) => bySid.get(sid)?.term.write(d))
-api.on('exit', sid => bySid.get(sid)?.term.write('\r\n\x1b[90m[closed]\x1b[0m\r\n'))
-api.on('host-closed', id => { if (live[id] !== true) return; clearInterval(timers[id]); delete timers[id]; toast(`${hostOf(id).name}: connection lost, reconnecting`); connectHost(id) })
+api.on('exit', sid => {
+  const t = bySid.get(sid); bySid.delete(sid)
+  if (!t || t.closed) return
+  t.closed = true
+  t.term.write('\r\n\x1b[33mDisconnected. Press Enter to reconnect.\x1b[0m\r\n')
+})
+api.on('host-closed', id => {
+  for (const [k, t] of tabs) if (k.startsWith(id + ':') && !t.closed) { t.closed = true; t.pending = true; t.term.write('\r\n\x1b[33mConnection lost, reconnecting…\x1b[0m\r\n') }
+  if (live[id] !== true) return; clearInterval(timers[id]); delete timers[id]; toast(`${hostOf(id).name}: connection lost, reconnecting`); connectHost(id) })
 api.on('host-retry', (id, n) => { retry[id] = n; render() })
 
 $('#q').oninput = renderSide

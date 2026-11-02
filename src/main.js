@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, clipboard } = require('electron')
 const path = require('path'), fs = require('fs'), os = require('os'), crypto = require('crypto')
 const { Client } = require('ssh2')
 const YAML = require('yaml')
@@ -151,12 +151,16 @@ ipcMain.handle('open', async (_, id, spec, cols, rows) => {
     s.on('data', d => send('data', sid, d.toString('utf8'))).stderr.on('data', d => send('data', sid, d.toString('utf8')))
     s.on('close', () => { streams.delete(sid); send('exit', sid) })
   }
-  spec?.cmd ? c.exec(spec.cmd, { pty }, cb) : spec ? c.exec(`tmux attach -t ${q(spec)}`, { pty }, cb) : c.shell(pty, cb)
+  spec?.cmd ? c.exec(spec.cmd, { pty }, cb) : spec ? c.exec(`tmux set -q -t ${q(spec)} status off \\; attach -t ${q(spec)}`, { pty }, cb) : c.shell(pty, cb)
   return sid
 })
 ipcMain.on('write', (_, sid, d) => streams.get(sid)?.write(d))
 ipcMain.on('resize', (_, sid, cols, rows) => streams.get(sid)?.setWindow(rows, cols, 0, 0))
 ipcMain.on('close', (_, sid) => streams.get(sid)?.close())
+ipcMain.handle('scroll', (_, id, name, n) => run(id, n < 0 ? `tmux copy-mode -e -t ${q(name)} \\; send-keys -X -N ${-n} -t ${q(name)} scroll-up` : `tmux send-keys -X -N ${n} -t ${q(name)} scroll-down`).catch(() => {}))
+ipcMain.handle('cancel', (_, id, name) => run(id, `tmux send-keys -X -t ${q(name)} cancel`).catch(() => {}))
+ipcMain.handle('copy', (_, t) => clipboard.writeText(t))
+ipcMain.handle('paste', () => clipboard.readText())
 
 app.whenReady().then(() => {
   win = new BrowserWindow({

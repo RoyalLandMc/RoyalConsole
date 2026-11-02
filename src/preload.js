@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('api', {
   write: (sid, d) => r.send('write', sid, d),
   resize: (sid, c, rw) => r.send('resize', sid, c, rw),
   close: sid => r.send('close', sid),
+  scroll: (id, name, n) => r.invoke('scroll', id, name, n),
+  cancel: (id, name) => r.invoke('cancel', id, name),
+  copy: t => r.invoke('copy', t),
+  paste: () => r.invoke('paste'),
   fs: (id, op, ...a) => r.invoke('fs', id, op, ...a),
   pathOf: f => webUtils.getPathForFile(f),
   on: (ch, f) => r.on(ch, (_, ...a) => f(...a))
