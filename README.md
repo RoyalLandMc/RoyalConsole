@@ -14,4 +14,4 @@ npm run dist   # dist/RoyalConsole-Setup-*.exe
 
 Hosts are saved in `%APPDATA%/royalconsole/hosts.json`. Key login only (default `~/.ssh/id_ed25519`).
 
-Releases: bump `version` in `package.json`, commit, then push a matching tag (`git tag v0.2.4 && git push origin v0.2.4`). GitHub Actions builds the installer and publishes the release.
+Releases: bump `version` in `package.json` and push to main, then run the **Release** workflow from the Actions tab (or push a matching `v*` tag). It builds the installer, creates the tag and publishes the release.

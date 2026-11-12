@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,11 +21,17 @@ jobs:
 
       - run: npm ci
 
-      - name: Check tag matches package.json version
+      - name: Resolve tag
+        id: tag
         shell: bash
         run: |
           v=$(node -p "require('./package.json').version")
-          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $v"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $v"; exit 1; }
+          elif git ls-remote --exit-code --tags origin "v$v" >/dev/null; then
+            echo "v$v already exists. Bump version in package.json first."; exit 1
+          fi
+          echo "name=v$v" >> "$GITHUB_OUTPUT"
 
       - name: Build installer
         run: npx electron-builder --win nsis --publish never
@@ -34,6 +41,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.exe \
-            --title "RoyalConsole ${GITHUB_REF_NAME#v}" \
+          t=${{ steps.tag.outputs.name }}
+          gh release create "$t" dist/*.exe \
+            --target "$GITHUB_SHA" \
+            --title "RoyalConsole ${t#v}" \
             --generate-notes
