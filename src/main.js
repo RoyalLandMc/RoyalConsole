@@ -167,6 +167,20 @@ app.whenReady().then(() => {
     width: 1300, height: 800, backgroundColor: '#14161a', autoHideMenuBar: true, title: 'RoyalConsole',
     webPreferences: { preload: path.join(__dirname, 'preload.js') }
   })
+  // Zoom: the default menu only zooms in on Ctrl+Shift+=, so Ctrl+- was a one-way trip.
+  // Handle zoom keys here so Ctrl+= / Ctrl++ / numpad + zoom in, Ctrl+- zooms out, Ctrl+0 resets.
+  const wc = win.webContents
+  const zoom = d => wc.setZoomLevel(d === 0 ? 0 : Math.max(-5, Math.min(5, wc.getZoomLevel() + d * 0.5)))
+  wc.on('before-input-event', (e, i) => {
+    if (i.type !== 'keyDown' || !(i.control || i.meta) || i.alt) return
+    const k = i.key, c = i.code
+    if (k === '=' || k === '+' || c === 'Equal' || c === 'NumpadAdd') zoom(1)
+    else if (k === '-' || k === '_' || c === 'Minus' || c === 'NumpadSubtract') zoom(-1)
+    else if (k === '0' || c === 'Digit0' || c === 'Numpad0') zoom(0)
+    else return
+    e.preventDefault()
+  })
+  wc.on('did-finish-load', () => wc.setZoomLevel(0))
   win.loadFile(path.join(__dirname, 'index.html'))
 })
 app.on('window-all-closed', () => app.quit())
